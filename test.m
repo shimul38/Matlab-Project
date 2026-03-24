@@ -45,3 +45,35 @@ subplot(2,2,4);
 plot(t, ecg_mwi(1:length(t)));
 xlabel("Time");
 ylabel("Amplitude");
+
+
+% --- Peak Detection & BPM Calculation ---
+% We use findpeaks to get all local maxima from the MWI signal
+[pks, locs] = findpeaks(ecg_mwi, 'MinPeakDistance', 0.2*fs_new);
+
+% Initialize adaptive thresholds
+spki = max(pks) * 0.5; % Start with a guess (50% of max)
+npki = mean(pks) * 0.1;
+threshold = npki + 0.25*(spki - npki);
+
+qrs_indices = [];
+
+for j = 1:length(pks)
+    if pks(j) > threshold
+        % It's a Heartbeat! Update Signal Level
+        qrs_indices = [qrs_indices; locs(j)];
+        spki = 0.125*pks(j) + 0.875*spki;
+    else
+        % It's Noise! Update Noise Level
+        npki = 0.125*pks(j) + 0.875*npki;
+    end
+    % Update threshold for the next peak
+    threshold = npki + 0.25*(spki - npki);
+end
+
+% Calculate BPM
+rr_intervals = diff(qrs_indices) / fs_new; % Time between beats in seconds
+average_rr = mean(rr_intervals);
+bpm = 60 / average_rr;
+
+fprintf('Final Calculated Heart Rate: %.2f BPM\n', bpm);
