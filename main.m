@@ -49,8 +49,8 @@ stats = struct('TP',0,'FP',0,'FN',0,'Se',0,'Pp',0);
 results_log = repmat(stats, num_files, 1);
 
 tolerance = 0.150 * fs_new; 
-filter_delay_seconds = 0.195; 
-delay_samples = round(filter_delay_seconds * fs_new);
+filter_delay_seconds = 0; 
+delay_samples = 0;
 
 for i = 1:num_files
     mwi_signal = tf_ecg{i};
@@ -59,6 +59,15 @@ for i = 1:num_files
     if isempty(mwi_signal), continue; end
     
     mwi_signal = mwi_signal / max(mwi_signal); 
+    % 1. Identify the 95th percentile to find a "normal" peak height
+    limit = prctile(mwi_signal, 95); 
+    
+    % 2. Cap any massive outliers at 1.5x that limit 
+    % This keeps the big spikes but prevents them from ruining the scale
+    mwi_signal(mwi_signal > 1.5*limit) = 1.5*limit;
+    
+    % 3. Re-normalize so your max is 1 again
+    mwi_signal = mwi_signal / max(mwi_signal);
     min_h = mean(mwi_signal); 
     [pks, locs] = findpeaks(mwi_signal, 'MinPeakDistance', 0.2*fs_new, 'MinPeakHeight', min_h);
     
@@ -149,14 +158,33 @@ results_table = table(File_No', all_bpm, [results_log.Se]', [results_log.Pp]', .
 writetable(results_table, 'B:\EEE 376\Labtest materials\lab-05\ECG_Full_Analysis.xlsx');
 
 %% SECTION 5: Visual Sanity Check
-idx = 9; % Record 100
-mwi_p = tf_ecg{idx} / max(tf_ecg{idx});
+%% SECTION 5: Visual Sanity Check
+idx = 23; % Record 108
+mwi_p = tf_ecg{idx} / max(tf_ecg{idx}); % Your existing normalization
 qrs_p = all_qrs_indices{idx};
+
 [a_l, a_t] = rdann(['mit-bih-arrhythmia-database-1.0.0\', num2str(File_No(idx))], 'atr');
 t_p = round(a_l(ismember(a_t, {'N','L','R','A','a','J','S','V','F','e','j','E','/'})) * (fs_new/fs_orig)) + delay_samples;
+shift_constant = 11; %shifts the truth label x-axis coordinates
+t_p = t_p + shift_constant;
+% ==========================================================
+% REPLACE YOUR OLD PLOT(T_P...) LINE WITH THIS NEW BLOCK:
+% ==========================================================
+% 1. Filter out indices that are too close to the edges to prevent errors
+t_p_valid = t_p(t_p > 10 & t_p <= length(mwi_p) - 10);
+t_p_heights = zeros(size(t_p_valid));
+
+% 2. Search a small 20-sample window around the truth index for the peak height
+for k = 1:length(t_p_valid)
+    t_p_heights(k) = max(mwi_p(t_p_valid(k)-10 : t_p_valid(k)+10));
+end
 
 figure; plot(mwi_p); hold on;
-plot(t_p(t_p<=length(mwi_p)), mwi_p(t_p(t_p<=length(mwi_p))), 'go', 'MarkerSize', 12); 
+% 3. Plot the Truth (Green Circles) using the new calculated heights
+plot(t_p_valid, t_p_heights, 'go', 'MarkerSize', 12, 'LineWidth', 2); 
+% ==========================================================
+
 plot(qrs_p, mwi_p(qrs_p), 'rx', 'MarkerSize', 10);
-legend('Signal', 'Truth', 'Detections'); title(['Validation: Record ', num2str(File_No(idx))]);
+legend('Signal', 'Truth', 'Detections'); 
+title(['Validation: Record ', num2str(File_No(idx))]);
 xlim([0 2000]); grid on;
