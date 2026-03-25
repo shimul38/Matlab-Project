@@ -77,3 +77,6 @@ average_rr = mean(rr_intervals);
 bpm = 60 / average_rr;
 
 fprintf('Final Calculated Heart Rate: %.2f BPM\n', bpm);
+
+
+
