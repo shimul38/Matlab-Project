@@ -42,7 +42,6 @@ end
 
 %% SECTION 3: Adaptive Thresholding & Validation
 fprintf('\n--- Starting Detection & Validation ---\n');
-
 all_bpm = zeros(num_files, 1); 
 all_qrs_indices = cell(num_files, 1); 
 stats = struct('TP',0,'FP',0,'FN',0,'Se',0,'Pp',0);
@@ -58,63 +57,86 @@ for i = 1:num_files
     
     if isempty(mwi_signal), continue; end
     
+    % --- Robust Normalization (Outlier Suppression) ---
     mwi_signal = mwi_signal / max(mwi_signal); 
-    % 1. Identify the 95th percentile to find a "normal" peak height
     limit = prctile(mwi_signal, 95); 
-    
-    % 2. Cap any massive outliers at 1.5x that limit 
-    % This keeps the big spikes but prevents them from ruining the scale
     mwi_signal(mwi_signal > 1.5*limit) = 1.5*limit;
-    
-    % 3. Re-normalize so your max is 1 again
     mwi_signal = mwi_signal / max(mwi_signal);
-    min_h = mean(mwi_signal); 
+    
+    min_h = mean(mwi_signal) * 0.8; %if not working, change it back to 1
     [pks, locs] = findpeaks(mwi_signal, 'MinPeakDistance', 0.2*fs_new, 'MinPeakHeight', min_h);
     
-    % --- DUAL THRESHOLD LOGIC ---
-    spki = max(pks) * 0.5; 
-    npki = mean(pks) * 0.1;
+    % --- SECTION 3: Adaptive Training (First 2 Seconds) ---
+    training_time = 2 * fs_new; 
+    train_idx = find(locs <= training_time);
+    if ~isempty(train_idx)
+        spki = mean(pks(train_idx)); 
+        npki = mean(mwi_signal(1:training_time)) * 0.5; 
+    else
+        spki = max(pks) * 0.4; 
+        npki = mean(mwi_signal) * 0.1;
+    end
+    
     T1 = npki + 0.25*(spki - npki);
-    T2 = 0.5 * T1; 
+    T2 = 0.5 * T1;
+    
     qrs_indices = [];
     avg_rr = 0.8 * fs_new; 
-
+    
     for j = 1:length(pks)
         current_peak_loc = locs(j);
         current_peak_val = pks(j);
-
+        
+        % --- ADDED: Threshold Decay (Fix for Record 203) ---
+        % If no beat has been detected for 1.5 seconds, the threshold is likely
+        % stuck on a large artifact or PVC. We drop the threshold to find smaller beats.
+        if ~isempty(qrs_indices) && (current_peak_loc - qrs_indices(end) > 1.5 * fs_new)
+            T1 = T1 * 0.5; 
+            T2 = 0.5 * T1;
+        end
+        
         % 1. Search-Back Logic
         if ~isempty(qrs_indices)
             if (current_peak_loc - qrs_indices(end)) > (1.66 * avg_rr)
                 potential_misses = find(locs > qrs_indices(end) & locs < current_peak_loc);
                 for m = potential_misses'
-                    if pks(m) > T2
+                    if pks(m) > (0.75 * T2)
                         qrs_indices = [qrs_indices; locs(m)];
-                        spki = 0.25*pks(m) + 0.75*spki; % Weight "weak" beats less
+                        spki = 0.25*pks(m) + 0.75*spki; 
+                        % Update thresholds immediately after finding a missed beat
+                        T1 = npki + 0.25*(spki - npki);
+                        T2 = 0.5 * T1;
                         break; 
                     end
                 end
             end
         end
-
+        
         % 2. Standard Detection
+        % --- Inside the (current_peak_val > T1) block ---
         if current_peak_val > T1
             qrs_indices = [qrs_indices; current_peak_loc];
-            spki = 0.125*current_peak_val + 0.875*spki;
+    
+            % --- ADDED: Saturation Cap ---
+            % Don't let a single peak be more than 2x the current spki
+            % This stops massive PVCs from "skyrocketing" your threshold
+            capped_val = min(current_peak_val, 2 * spki); 
+            spki = 0.125*capped_val + 0.875*spki;
         else
             npki = 0.125*current_peak_val + 0.875*npki;
         end
         
+        % Final Threshold Update
         T1 = npki + 0.25*(spki - npki);
         T2 = 0.5 * T1;
         
         if length(qrs_indices) > 2
-            avg_rr = mean(diff(qrs_indices(max(1, end-4):end))); % Use last 5 beats for avg
+            avg_rr = mean(diff(qrs_indices(max(1, end-4):end))); 
         end
     end
     
-    all_qrs_indices{i} = qrs_indices; % CRITICAL: Store for plotting
-
+    all_qrs_indices{i} = qrs_indices; 
+    
     % 3. BPM Calculation
     if length(qrs_indices) > 1
         all_bpm(i) = 60 / (mean(diff(qrs_indices)) / fs_new);
@@ -155,35 +177,27 @@ fprintf('Overall Detection Accuracy: %.2f%%\n', avg_Acc);
 
 results_table = table(File_No', all_bpm, [results_log.Se]', [results_log.Pp]', ...
     'VariableNames', {'Record_ID', 'BPM', 'Sensitivity', 'Pos_Predictivity'});
-writetable(results_table, 'B:\EEE 376\Labtest materials\lab-05\ECG_Full_Analysis.xlsx');
+writetable(results_table, 'ECG_Full_Analysis.xlsx');
 
 %% SECTION 5: Visual Sanity Check
-%% SECTION 5: Visual Sanity Check
-idx = 23; % Record 108
-mwi_p = tf_ecg{idx} / max(tf_ecg{idx}); % Your existing normalization
+idx = 23; % Adjust this to check Record 203 (index 23 or 24 depending on File_No)
+mwi_p = tf_ecg{idx} / max(tf_ecg{idx}); 
 qrs_p = all_qrs_indices{idx};
 
 [a_l, a_t] = rdann(['mit-bih-arrhythmia-database-1.0.0\', num2str(File_No(idx))], 'atr');
-t_p = round(a_l(ismember(a_t, {'N','L','R','A','a','J','S','V','F','e','j','E','/'})) * (fs_new/fs_orig)) + delay_samples;
-shift_constant = 11; %shifts the truth label x-axis coordinates
+t_p = round(a_l(ismember(a_t, {'N','L','R','A','a','J','S','V','F','e','j','E','/'})) * (fs_new/fs_orig));
+
+shift_constant = 11; 
 t_p = t_p + shift_constant;
-% ==========================================================
-% REPLACE YOUR OLD PLOT(T_P...) LINE WITH THIS NEW BLOCK:
-% ==========================================================
-% 1. Filter out indices that are too close to the edges to prevent errors
+
 t_p_valid = t_p(t_p > 10 & t_p <= length(mwi_p) - 10);
 t_p_heights = zeros(size(t_p_valid));
-
-% 2. Search a small 20-sample window around the truth index for the peak height
 for k = 1:length(t_p_valid)
     t_p_heights(k) = max(mwi_p(t_p_valid(k)-10 : t_p_valid(k)+10));
 end
 
 figure; plot(mwi_p); hold on;
-% 3. Plot the Truth (Green Circles) using the new calculated heights
 plot(t_p_valid, t_p_heights, 'go', 'MarkerSize', 12, 'LineWidth', 2); 
-% ==========================================================
-
 plot(qrs_p, mwi_p(qrs_p), 'rx', 'MarkerSize', 10);
 legend('Signal', 'Truth', 'Detections'); 
 title(['Validation: Record ', num2str(File_No(idx))]);
