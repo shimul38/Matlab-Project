@@ -164,20 +164,29 @@ for i = 1:num_files
         fprintf('Warning: Failed to validate Record %d\n', No);
     end
 end
+%% SECTION 4: Clean Results & Export
+% 1. Extract the scores
+all_se = [results_log.Se];
+all_pp = [results_log.Pp];
 
-%% SECTION 4: Results & Export
-avg_Se = mean([results_log.Se], 'omitnan');
-avg_Pp = mean([results_log.Pp], 'omitnan');
-avg_Acc = (sum([results_log.TP]) / (sum([results_log.TP]) + sum([results_log.FP]) + sum([results_log.FN]))) * 100;
+% 2. Find only the records that actually processed (where Se > 0)
+valid_idx = all_se > 0; 
 
-fprintf('\n--- Final Pipeline Results ---\n');
+% 3. Calculate mean ONLY for processed files
+avg_Se = mean(all_se(valid_idx));
+avg_Pp = mean(all_pp(valid_idx));
+
+% 4. Overall Accuracy (Total TP / (Total TP + Total FP + Total FN))
+% This one is already robust because we only sum existing values
+total_tp = sum([results_log.TP]);
+total_fp = sum([results_log.FP]);
+total_fn = sum([results_log.FN]);
+avg_Acc = (total_tp / (total_tp + total_fp + total_fn)) * 100;
+
+fprintf('\n--- Final VALIDATED Results (%d Files) ---\n', sum(valid_idx));
 fprintf('Average Sensitivity (Se): %.2f%%\n', avg_Se);
 fprintf('Average Positive Predictivity (+P): %.2f%%\n', avg_Pp);
 fprintf('Overall Detection Accuracy: %.2f%%\n', avg_Acc);
-
-results_table = table(File_No', all_bpm, [results_log.Se]', [results_log.Pp]', ...
-    'VariableNames', {'Record_ID', 'BPM', 'Sensitivity', 'Pos_Predictivity'});
-writetable(results_table, 'ECG_Full_Analysis.xlsx');
 
 %% SECTION 5: Visual Sanity Check
 idx = 23; % Adjust this to check Record 203 (index 23 or 24 depending on File_No)
