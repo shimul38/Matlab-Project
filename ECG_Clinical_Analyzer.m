@@ -1,8 +1,8 @@
 %% =========================================================================
 %  Bio-AI Clinical ECG Analyzer — Pan-Tompkins QRS Detector
 %  Author   : Snehashish (BUET, Applied Bio-AI)
-%  Supervisor: Dr. Taufiq Hasan
-%  Version  : 2.0 (R-peak back-tracing, zero-phase pipeline, improved HRV)
+%  Supervisor: Dr. S.M. Mahabubur Rahman
+%  Version  : 2.1 (sgtitle fix, .atr-optional, zero-phase pipeline)
 %% =========================================================================
 clc; clear; close all;
 
@@ -292,16 +292,22 @@ msgbox(report_str, ['Clinical Summary — ', record_name]);
 %  SECTION 10: Visualization (3-Subplot Layout)
 %% =========================================================================
 % Clamp indices for safety
-qrs_plot        = qrs_refined(qrs_refined > 0 & qrs_refined <= N);
-qrs_mwi_plot    = qrs_mwi(qrs_mwi > 0 & qrs_mwi <= N);
-truth_plot      = truth_indices(truth_indices > 0 & truth_indices <= N);
+qrs_plot     = qrs_refined(qrs_refined > 0 & qrs_refined <= N);
+qrs_mwi_plot = qrs_mwi(qrs_mwi > 0 & qrs_mwi <= N);
+
+% Guard: truth_indices may be empty if no .atr file was found
+if ~isempty(truth_indices)
+    truth_plot = truth_indices(truth_indices > 0 & truth_indices <= N);
+else
+    truth_plot = [];
+end
 
 fig = figure('Name', ['ECG Analysis: ', record_name], ...
              'NumberTitle', 'off', ...
-             'Position', [50, 50, 1100, 700]);
+             'Position', [50, 50, 1000, 600]);
 
 ax1 = subplot(3,1,1);
-plot(time_ax, ecg_resampled, 'Color', [0.2 0.4 0.8], 'LineWidth', 0.8);
+plot(time_ax, ecg_resampled, 'Color', [0.2 0.4 0.8], 'LineWidth', 0.8, 'DisplayName', 'Raw ECG');
 hold on;
 if ~isempty(truth_plot)
     plot(time_ax(truth_plot), ecg_resampled(truth_plot), ...
@@ -311,7 +317,7 @@ plot(time_ax(qrs_plot), ecg_resampled(qrs_plot), ...
      'rx', 'MarkerSize', 9, 'LineWidth', 2.0, 'DisplayName', 'Detected R-peaks');
 title(['Raw ECG + R-peak Detections — ', diagnosis], 'FontWeight', 'bold');
 ylabel('Amplitude (mV)');
-legend('Raw ECG', 'Expert Annotations', 'Detected R-peaks', 'Location', 'best');
+legend('Location', 'best');  % Uses DisplayName from each plot call
 grid on; xlim([0, min(10, time_ax(end))]);
 
 ax2 = subplot(3,1,2);
@@ -335,5 +341,12 @@ legend('MWI Signal', 'MWI Peaks (Pre-Refinement)', 'Location', 'best');
 grid on; xlim([0, min(10, time_ax(end))]);
 
 linkaxes([ax1, ax2, ax3], 'x');
-sgtitle(['Pan-Tompkins QRS Detector — Record: ', record_name], ...
-        'FontSize', 13, 'FontWeight', 'bold');
+
+% sgtitle() is unavailable in older MATLAB versions — use annotation instead
+annotation('textbox', [0, 0.97, 1, 0.03], ...
+    'String',     ['Pan-Tompkins QRS Detector — Record: ', record_name], ...
+    'FontSize',   13, ...
+    'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'center', ...
+    'EdgeColor',  'none', ...
+    'FitBoxToText', 'off');
